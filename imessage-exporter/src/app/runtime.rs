@@ -211,6 +211,21 @@ impl Config {
         let export_path_len = self.options.export_path.as_os_str().len();
         let max_len = MAX_LENGTH.saturating_sub(export_path_len + 1);
 
+        // Revocación fork: one-to-one chat with a contact in the address book
+        // -> `Name [identifier]`, e.g. `Arancha 1997 [+34606893792]`.
+        // Chats without a contact name and group chats keep upstream naming.
+        if self.options.whatsapp_format
+            && participants.len() == 1
+            && let Some(participant_id) = participants.iter().next()
+            && let Some(name) = self.resolve_participant(*participant_id)
+            && !name.full.is_empty()
+        {
+            let named = format!("{} [{}]", name.full, name.details);
+            if named.len() <= max_len {
+                return named;
+            }
+        }
+
         let mut added = 0;
         let mut out_s = String::with_capacity(max_len);
         for participant_id in participants {

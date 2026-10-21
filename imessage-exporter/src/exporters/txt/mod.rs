@@ -355,13 +355,20 @@ impl<'a> MessageFormatter<'a> for TXT<'a> {
                 expressive: ctx.expressive,
                 tapbacks: build_tapbacks(self, message, idx, std::convert::identity)?
                     .map(|tapbacks| TapbacksVM { tapbacks }),
-                replies: build_replies(
-                    self,
-                    ctx.replies_map.get_mut(&idx),
-                    Self::BUFFER_CAPACITY,
-                    std::convert::identity,
-                )?
-                .map(|replies| RepliesVM { replies }),
+                // Revocación fork: with --whatsapp-format replies are not
+                // repeated (indented) under the quoted message; each reply
+                // keeps a `Responde a:` line at its own place instead.
+                replies: if self.config.options.whatsapp_format {
+                    None
+                } else {
+                    build_replies(
+                        self,
+                        ctx.replies_map.get_mut(&idx),
+                        Self::BUFFER_CAPACITY,
+                        std::convert::identity,
+                    )?
+                    .map(|replies| RepliesVM { replies })
+                },
             });
         }
 
@@ -379,7 +386,9 @@ impl<'a> MessageFormatter<'a> for TXT<'a> {
                 .shared_location_kind()
                 .map(|kind| self.format_shared_location(kind)),
             parts,
-            is_reply: message.is_reply(),
+            // Revocación fork: the generic English reply notice is replaced
+            // by `Responde a:` below
+            is_reply: message.is_reply() && !self.config.options.whatsapp_format,
             context,
         };
 
@@ -388,7 +397,11 @@ impl<'a> MessageFormatter<'a> for TXT<'a> {
             // `[timestamp] sender: body\ncontinuation...\n`
             let mut buf = String::with_capacity(Self::BUFFER_CAPACITY);
             render_template_into(&vm, &mut buf);
-            let reshaped = Self::whatsapp_reshape(&buf);
+            let mut reshaped = Self::whatsapp_reshape(&buf);
+            if let Some(quoted) = self.whatsapp_quoted(message) {
+                reshaped.push_str(&quoted);
+                reshaped.push('\n');
+            }
             match context {
                 RenderContext::TopLevel => out.push_str(&reshaped),
                 RenderContext::Reply => Self::push_indented(out, &reshaped, REPLY_INDENT),
@@ -526,6 +539,31 @@ impl TXT<'_> {
         }
         out.push('\n');
         out
+    }
+
+    /// Revocación fork: for a reply (iMessage «Responder», a quote), the line
+    /// `Responde a: [dd/mm/yyyy, hh:mm:ss] Sender` pointing to the quoted
+    /// message, read from the same database by its GUID. If the quoted
+    /// message is not in the database, say so instead of guessing.
+    fn whatsapp_quoted(&self, message: &Message) -> Option<String> {
+        let guid = message.thread_originator_guid.as_deref()?;
+        let found = Message::from_guid(
+            guid,
+            self.config.data_source.db(),
+            &self.config.data_source.capabilities,
+        );
+        Some(match found {
+            Ok(quoted) => format!(
+                "Responde a: [{}] {}",
+                whatsapp_timestamp(quoted.date, self.config.offset),
+                self.config.who(
+                    quoted.handle_id,
+                    quoted.is_from_me(),
+                    &quoted.destination_caller_id,
+                )
+            ),
+            Err(_) => "Responde a un mensaje que no está en la copia".to_string(),
+        })
     }
 
     /// Revocación fork: `<attached: relative/path (original name)>`.
