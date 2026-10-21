@@ -25,6 +25,15 @@ pub fn format_timestamp(timestamp: i64, offset: i64) -> String {
     }
 }
 
+/// Revocación fork: format a raw iMessage timestamp like a WhatsApp
+/// `_chat.txt` export (`dd/mm/yyyy, hh:mm:ss`, local time, 24h clock).
+pub fn whatsapp_timestamp(timestamp: i64, offset: i64) -> String {
+    match get_local_time(timestamp, offset) {
+        Ok(d) => d.format("%d/%m/%Y, %H:%M:%S").to_string(),
+        Err(why) => why.to_string(),
+    }
+}
+
 /// Compute the formatted timestamp and read receipt for a message.
 /// Returns `(formatted_date, read_receipt)` where `read_receipt` is
 /// empty if there is no read receipt data.

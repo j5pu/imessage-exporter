@@ -15,7 +15,7 @@ use crate::{
             render::{render_template, render_template_into},
             reply::{build_replies, build_tapbacks},
             tapback::resolve_tapback,
-            time::{format_timestamp, message_time},
+            time::{format_message_date, format_timestamp, message_time, whatsapp_timestamp},
         },
     },
 };
@@ -28,7 +28,7 @@ use imessage_database::{
             Message,
             models::{AttachmentMeta, AttributedRange, SharedLocation},
         },
-        table::YOU,
+        table::{ME, YOU},
     },
 };
 
@@ -105,7 +105,11 @@ impl<'a> MessageFormatter<'a> for TXT<'a> {
         }
 
         AttachmentRender::Embedded(render_template(&AttachmentVM {
-            embed_path: self.config.message_attachment_path(attachment),
+            embed_path: if self.config.options.whatsapp_format {
+                self.whatsapp_attachment(attachment)
+            } else {
+                self.config.message_attachment_path(attachment)
+            },
             transcription: metadata.transcription.as_deref(),
         }))
     }
@@ -171,9 +175,35 @@ impl<'a> MessageFormatter<'a> for TXT<'a> {
     }
 
     fn format_announcement(&self, msg: &Message, out: &mut String) {
-        let kind = resolve_announcement(msg, self.config, YOU)
+        // Revocación fork: with --whatsapp-format the user is `Me` everywhere
+        let you = if self.config.options.whatsapp_format { ME } else { YOU };
+        let kind = resolve_announcement(msg, self.config, you)
             .map_or(AnnouncementBody::Unknown, AnnouncementBody::from);
-        render_template_into(&AnnouncementVM { kind }, out);
+        if !self.config.options.whatsapp_format {
+            render_template_into(&AnnouncementVM { kind }, out);
+            return;
+        }
+        // Revocación fork: `[dd/mm/yyyy, hh:mm:ss] Who action`, one line, no blank separator
+        let mut buf = String::new();
+        render_template_into(&AnnouncementVM { kind }, &mut buf);
+        let upstream_date = format_message_date(msg, self.config.offset);
+        let wa_date = whatsapp_timestamp(msg.date, self.config.offset);
+        let body = buf.trim_end_matches('\n');
+        match body.strip_prefix(&upstream_date) {
+            Some(rest) => {
+                out.push('[');
+                out.push_str(&wa_date);
+                out.push(']');
+                out.push_str(rest);
+            }
+            None => {
+                out.push('[');
+                out.push_str(&wa_date);
+                out.push_str("] ");
+                out.push_str(body);
+            }
+        }
+        out.push('\n');
     }
 
     fn format_shareplay(&self) -> &'static str {
@@ -200,6 +230,9 @@ impl<'a> MessageFormatter<'a> for TXT<'a> {
         let kind = normalize_edited(msg, edited_message, message_part_idx, self.config, YOU)?
             .map_rows(|event| {
                 let timestamp_prefix = match event.diff_since_previous {
+                    EditDiff::First if self.config.options.whatsapp_format => {
+                        format!("[{}] ", whatsapp_timestamp(event.date, self.config.offset))
+                    }
                     EditDiff::First => {
                         let mut s = format_timestamp(event.date, self.config.offset);
                         s.push(' ');
@@ -350,6 +383,19 @@ impl<'a> MessageFormatter<'a> for TXT<'a> {
             context,
         };
 
+        if self.config.options.whatsapp_format {
+            // Revocación fork: reshape `timestamp\nsender\nbody...\n\n` into
+            // `[timestamp] sender: body\ncontinuation...\n`
+            let mut buf = String::with_capacity(Self::BUFFER_CAPACITY);
+            render_template_into(&vm, &mut buf);
+            let reshaped = Self::whatsapp_reshape(&buf);
+            match context {
+                RenderContext::TopLevel => out.push_str(&reshaped),
+                RenderContext::Reply => Self::push_indented(out, &reshaped, REPLY_INDENT),
+            }
+            return Ok(());
+        }
+
         match context {
             RenderContext::TopLevel => {
                 render_template_into(&vm, out);
@@ -435,6 +481,10 @@ impl PartBodyBuilder for TXT<'_> {
 // MARK: Impl
 impl TXT<'_> {
     fn get_time(&self, message: &Message) -> String {
+        // Revocación fork: WhatsApp-style date, no read/delivered receipt
+        if self.config.options.whatsapp_format {
+            return whatsapp_timestamp(message.date, self.config.offset);
+        }
         let (mut date, read_receipt) = message_time(self.config, message);
         if read_receipt.is_empty() {
             date
@@ -442,6 +492,66 @@ impl TXT<'_> {
             date.push(' ');
             date.push_str(&read_receipt);
             date
+        }
+    }
+
+    /// Revocación fork: turn the upstream block
+    /// `timestamp\nsender\nbody line 1\nbody line 2\n\n` into the WhatsApp
+    /// `_chat.txt` shape `[timestamp] sender: body line 1\nbody line 2\n`.
+    /// Body lines are kept verbatim; only trailing blank lines are dropped.
+    fn whatsapp_reshape(rendered: &str) -> String {
+        let mut lines = rendered.lines();
+        let timestamp = lines.next().unwrap_or_default();
+        let sender = lines.next().unwrap_or_default();
+        let mut body: Vec<&str> = lines.collect();
+        while body.last().is_some_and(|line| line.trim().is_empty()) {
+            body.pop();
+        }
+        let mut out = String::with_capacity(rendered.len() + 4);
+        out.push('[');
+        out.push_str(timestamp);
+        out.push_str("] ");
+        out.push_str(sender);
+        out.push(':');
+        for (idx, line) in body.iter().enumerate() {
+            if idx == 0 {
+                if !line.is_empty() {
+                    out.push(' ');
+                    out.push_str(line);
+                }
+            } else {
+                out.push('\n');
+                out.push_str(line);
+            }
+        }
+        out.push('\n');
+        out
+    }
+
+    /// Revocación fork: `<attached: relative/path (original name)>`.
+    /// The path is made relative to the export folder (copied attachments) or
+    /// to the source passed with `--db-path` (e.g. `1f/1fda...` inside an iOS
+    /// backup), so it stays traceable even when the file no longer exists.
+    fn whatsapp_attachment(&self, attachment: &Attachment) -> String {
+        let path = self.config.message_attachment_path(attachment);
+        let db_path = &self.config.options.db_path;
+        let as_path = std::path::Path::new(&path);
+        let relative = as_path
+            .strip_prefix(db_path)
+            .map(std::path::Path::to_path_buf)
+            .ok()
+            .or_else(|| {
+                let canon = db_path.canonicalize().ok()?;
+                as_path.strip_prefix(canon).map(std::path::Path::to_path_buf).ok()
+            })
+            .map_or_else(|| path.clone(), |p| p.display().to_string());
+        let original = attachment
+            .filename()
+            .and_then(|name| std::path::Path::new(name).file_name())
+            .map(|name| name.to_string_lossy().to_string());
+        match original {
+            Some(name) if !relative.ends_with(&name) => format!("<attached: {relative} ({name})>"),
+            _ => format!("<attached: {relative}>"),
         }
     }
 
@@ -481,6 +591,51 @@ mod tests {
         },
         util::{dirs::home, platform::Platform},
     };
+
+    // MARK: Revocación fork tests
+    #[test]
+    fn whatsapp_reshape_single_line() {
+        let rendered = "25/10/2018, 11:38:31\nMe\nHola\n\n";
+        assert_eq!(
+            TXT::whatsapp_reshape(rendered),
+            "[25/10/2018, 11:38:31] Me: Hola\n"
+        );
+    }
+
+    #[test]
+    fn whatsapp_reshape_multi_line() {
+        let rendered = "25/10/2018, 13:36:35\nDeborah\nTe dejo el tel\n914587628\nThis message responded to an earlier message.\n\n";
+        assert_eq!(
+            TXT::whatsapp_reshape(rendered),
+            "[25/10/2018, 13:36:35] Deborah: Te dejo el tel\n914587628\nThis message responded to an earlier message.\n"
+        );
+    }
+
+    #[test]
+    fn whatsapp_reshape_empty_body() {
+        assert_eq!(
+            TXT::whatsapp_reshape("01/01/2014, 00:00:00\nMe\n\n"),
+            "[01/01/2014, 00:00:00] Me:\n"
+        );
+    }
+
+    #[test]
+    fn whatsapp_get_time_has_no_read_receipt() {
+        let mut options = Options::fake_options(ExportType::Txt);
+        options.whatsapp_format = true;
+        let config = Config::fake_app(options);
+        let exporter = TXT::new(&config).unwrap();
+        let mut message = Config::fake_message();
+        message.date = 674526582885055488;
+        message.date_delivered = 674526582885055488;
+        message.date_read = 674530231992568192;
+        let time = exporter.get_time(&message);
+        assert!(!time.contains("Read by"), "{time}");
+        // dd/mm/yyyy, hh:mm:ss
+        assert_eq!(time.len(), 20, "{time}");
+        assert_eq!(&time[2..3], "/");
+        assert_eq!(&time[10..12], ", ");
+    }
 
     #[test]
     fn can_create() {

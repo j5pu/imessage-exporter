@@ -193,10 +193,12 @@ impl ContactsIndex {
         // c0First (TEXT), c1Last (TEXT), c16Phone (TEXT: space-separated variants), c17Email (TEXT: space-separated)
         let mut index = HashMap::new();
 
-        let mut stmt = conn.prepare(
-            "SELECT c0First, c1Last, c16Phone, c17Email
-             FROM ABPersonFullTextSearch_content",
-        )?;
+        // Revocación fork: the FTS column numbers differ between iOS versions
+        // (iOS 7 has `c15Phone`/`c16Email` because `c7OrganizationPhonetic` does
+        // not exist yet), so pick each column by its name suffix instead of a
+        // hardcoded number.
+        let query = Self::ios_fts_query(conn)?;
+        let mut stmt = conn.prepare(&query)?;
         let mut rows = stmt.query([])?;
         while let Some(row) = rows.next()? {
             let name = Name::from_opt(
@@ -224,6 +226,36 @@ impl ContactsIndex {
         }
 
         Ok(Self { index })
+    }
+
+    /// Revocación fork: build the iOS FTS query choosing the `First`, `Last`,
+    /// `Phone` and `Email` columns by name suffix (`cNFirst`, `cNLast`, ...),
+    /// so it works for iOS 7 (`c15Phone`, `c16Email`) and modern iOS
+    /// (`c16Phone`, `c17Email`). Falls back to the upstream column names.
+    fn ios_fts_query(conn: &Connection) -> Result<String> {
+        let mut stmt = conn.prepare("PRAGMA table_info(ABPersonFullTextSearch_content)")?;
+        let columns: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>>>()?;
+        let pick = |suffix: &str, fallback: &str| -> String {
+            columns
+                .iter()
+                .find(|c| {
+                    c.strip_prefix('c').is_some_and(|rest| {
+                        rest.strip_suffix(suffix)
+                            .is_some_and(|n| !n.is_empty() && n.chars().all(|ch| ch.is_ascii_digit()))
+                    })
+                })
+                .cloned()
+                .unwrap_or_else(|| fallback.to_string())
+        };
+        Ok(format!(
+            "SELECT {}, {}, {}, {} FROM ABPersonFullTextSearch_content",
+            pick("First", "c0First"),
+            pick("Last", "c1Last"),
+            pick("Phone", "c16Phone"),
+            pick("Email", "c17Email"),
+        ))
     }
 
     /// Look up a contact name by handle string.
@@ -416,6 +448,50 @@ fn macos_sources_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // MARK: Revocación fork tests
+    fn fts_conn(columns: &[&str], row: &[&str]) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TABLE ABPersonFullTextSearch_content (docid INTEGER PRIMARY KEY, {});",
+            columns.iter().map(|c| format!("{c} TEXT")).collect::<Vec<_>>().join(", ")
+        ))
+        .unwrap();
+        let placeholders = vec!["?"; row.len()].join(", ");
+        conn.execute(
+            &format!(
+                "INSERT INTO ABPersonFullTextSearch_content ({}) VALUES ({placeholders})",
+                columns.join(", ")
+            ),
+            rusqlite::params_from_iter(row.iter()),
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn ios7_fts_columns_are_found_by_suffix() {
+        // iOS 7 layout: no c7OrganizationPhonetic, so phone/email shift down by one
+        let conn = fts_conn(
+            &["c0First", "c1Last", "c15Phone", "c16Email"],
+            &["Ana", "Prueba", "+34600111222 600111222", "ana@example.com"],
+        );
+        let query = ContactsIndex::ios_fts_query(&conn).unwrap();
+        assert!(query.contains("c15Phone") && query.contains("c16Email"), "{query}");
+        let index = ContactsIndex::build_from_ios(&conn).unwrap();
+        assert_eq!(index.lookup("+34600111222").unwrap().full, "Ana Prueba");
+        assert_eq!(index.lookup("ana@example.com").unwrap().full, "Ana Prueba");
+    }
+
+    #[test]
+    fn modern_fts_columns_still_work() {
+        let conn = fts_conn(
+            &["c0First", "c1Last", "c16Phone", "c17Email"],
+            &["Ana", "Prueba", "+34600111222", "ana@example.com"],
+        );
+        let index = ContactsIndex::build_from_ios(&conn).unwrap();
+        assert_eq!(index.lookup("+34600111222").unwrap().full, "Ana Prueba");
+    }
 
     #[test]
     fn test_phone_lookup_us_with_country_code_with_plus() {

@@ -44,6 +44,8 @@ pub const OPTION_CLEARTEXT_PASSWORD: &str = "cleartext-password";
 pub const OPTION_CUSTOM_CONTACTS_DB_PATH: &str = "contacts-path";
 pub const OPTION_NO_PROGRESS: &str = "no-progress";
 pub const OPTION_USE_MESSAGE_TIMES: &str = "use-message-times";
+/// Revocación fork: WhatsApp-style TXT output
+pub const OPTION_WHATSAPP_FORMAT: &str = "whatsapp-format";
 
 // Other CLI Text
 pub const SUPPORTED_FILE_TYPES: &str = "txt, html";
@@ -92,6 +94,8 @@ pub struct Options {
     pub show_progress: bool,
     /// Whether to stamp transcript and attachment files with message dates.
     pub use_message_times: bool,
+    /// Revocación fork: render TXT transcripts like a WhatsApp `_chat.txt` export.
+    pub whatsapp_format: bool,
 }
 
 // Redact the cleartext backup password from debug output.
@@ -119,6 +123,7 @@ impl std::fmt::Debug for Options {
             .field("contacts_path", &self.contacts_path)
             .field("show_progress", &self.show_progress)
             .field("use_message_times", &self.use_message_times)
+            .field("whatsapp_format", &self.whatsapp_format)
             .finish()
     }
 }
@@ -144,6 +149,7 @@ impl Options {
         let contacts_path: Option<&String> = args.get_one(OPTION_CUSTOM_CONTACTS_DB_PATH);
         let show_progress = !args.get_flag(OPTION_NO_PROGRESS);
         let use_message_times = args.get_flag(OPTION_USE_MESSAGE_TIMES);
+        let whatsapp_format = args.get_flag(OPTION_WHATSAPP_FORMAT);
 
         // Build the export type
         let export_type: Option<ExportType> = match export_file_type {
@@ -168,6 +174,7 @@ impl Options {
                 (conversation_filter.is_some(), OPTION_CONVERSATION_FILTER),
                 (!show_progress, OPTION_NO_PROGRESS),
                 (use_message_times, OPTION_USE_MESSAGE_TIMES),
+                (whatsapp_format, OPTION_WHATSAPP_FORMAT),
             ];
             for (set, opt) in format_deps {
                 if set {
@@ -198,6 +205,7 @@ impl Options {
             (conversation_filter.is_some(), OPTION_CONVERSATION_FILTER),
             (!show_progress, OPTION_NO_PROGRESS),
             (use_message_times, OPTION_USE_MESSAGE_TIMES),
+            (whatsapp_format, OPTION_WHATSAPP_FORMAT),
         ];
         for (set, opt) in diag_conflicts {
             if diagnostic && set {
@@ -317,6 +325,7 @@ impl Options {
             contacts_path: contacts_path.cloned().map(PathBuf::from),
             show_progress,
             use_message_times,
+            whatsapp_format,
         })
     }
 
@@ -528,6 +537,13 @@ fn get_command() -> Command {
                 .action(ArgAction::SetTrue)
                 .display_order(17),
         )
+        .arg(
+            Arg::new(OPTION_WHATSAPP_FORMAT)
+                .long(OPTION_WHATSAPP_FORMAT)
+                .help("Revocación fork: render `txt` transcripts like a WhatsApp `_chat.txt` export\nEach message is `[dd/mm/yyyy, hh:mm:ss] Sender: text`, continuation lines are unprefixed,\nread/delivered receipts are omitted and attachments are `<attached: path relative to the source (original name)>`\n")
+                .action(ArgAction::SetTrue)
+                .display_order(18),
+        )
 }
 
 #[cfg(test)]
@@ -559,6 +575,7 @@ impl Options {
             // bars over test output.
             show_progress: false,
             use_message_times: false,
+            whatsapp_format: false,
         }
     }
 }
@@ -608,6 +625,7 @@ mod arg_tests {
             contacts_path: None,
             show_progress: true,
             use_message_times: false,
+            whatsapp_format: false,
         };
 
         assert_eq!(actual, expected);
@@ -685,6 +703,7 @@ mod arg_tests {
             contacts_path: None,
             show_progress: true,
             use_message_times: false,
+            whatsapp_format: false,
         };
 
         assert_eq!(actual, expected);
@@ -717,6 +736,7 @@ mod arg_tests {
             contacts_path: None,
             show_progress: true,
             use_message_times: false,
+            whatsapp_format: false,
         };
 
         assert_eq!(actual, expected);
@@ -792,6 +812,7 @@ mod arg_tests {
             contacts_path: None,
             show_progress: true,
             use_message_times: false,
+            whatsapp_format: false,
         };
 
         assert_eq!(actual, expected);
@@ -832,6 +853,7 @@ mod arg_tests {
             contacts_path: None,
             show_progress: true,
             use_message_times: false,
+            whatsapp_format: false,
         };
 
         assert_eq!(actual, expected);
@@ -886,6 +908,7 @@ mod arg_tests {
             contacts_path: None,
             show_progress: true,
             use_message_times: false,
+            whatsapp_format: false,
         };
 
         assert_eq!(actual, expected);
@@ -918,6 +941,7 @@ mod arg_tests {
             contacts_path: None,
             show_progress: true,
             use_message_times: false,
+            whatsapp_format: false,
         };
 
         assert_eq!(actual, expected);
@@ -951,6 +975,7 @@ mod arg_tests {
             contacts_path: None,
             show_progress: true,
             use_message_times: false,
+            whatsapp_format: false,
         };
 
         assert_eq!(actual, expected);
@@ -983,6 +1008,7 @@ mod arg_tests {
             contacts_path: None,
             show_progress: true,
             use_message_times: false,
+            whatsapp_format: false,
         };
 
         assert_eq!(actual, expected);
@@ -1015,6 +1041,7 @@ mod arg_tests {
             contacts_path: None,
             show_progress: true,
             use_message_times: false,
+            whatsapp_format: false,
         };
 
         assert_eq!(actual, expected);
@@ -1086,6 +1113,7 @@ mod arg_tests {
             contacts_path: None,
             show_progress: true,
             use_message_times: false,
+            whatsapp_format: false,
         };
 
         assert_eq!(actual, expected);
