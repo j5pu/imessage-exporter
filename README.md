@@ -14,7 +14,15 @@
 > 2. **Sin acuses de lectura ni de entrega.** Con la opción activa no se escribe «(Read by … after …)». La fecha y el texto del mensaje no se tocan.
 > 3. **Anexos rastreables.** Cada anexo se escribe como `<attached: ruta relativa (nombre original)>`. La ruta es relativa a la carpeta pasada con `-p` (en una copia de iPhone, por ejemplo `1f/1fda0c…`) o a la carpeta de exportación si el anexo se copió. Se escribe aunque el fichero ya no exista en la copia, para que el mensaje no quede huérfano y se pueda localizar después. Ya no aparecen rutas absolutas de carpetas temporales.
 > 3b. **Citas («Responder» de iMessage).** La respuesta solo aparece una vez, en su sitio por fecha, sin la copia sangrada que la versión oficial pone bajo el mensaje citado. Debajo lleva la línea `Responde a: [dd/mm/aaaa, hh:mm:ss] Remitente` del mensaje citado, buscado en la misma base por su GUID. Si el mensaje citado no está en la copia, pone `Responde a un mensaje que no está en la copia`. Esta línea sustituye al aviso genérico «This message responded to an earlier message.».
-> 3c. **Nombre de fichero.** En una conversación con una sola persona que está en la agenda, el fichero se llama `Nombre [identificador].txt`, donde el identificador es el teléfono o el email con que el iPhone guardó la conversación (por ejemplo `Arancha 1997 [+34606893792].txt`). Los demás casos conservan el nombre oficial: sin contacto, grupos, remitentes cortos y `orphaned.txt`.
+> 3c. **Nombre de fichero.** Cada participante que está en la agenda aparece como `Nombre [identificador]`. El identificador es el teléfono o el email con que el iPhone guardó la conversación. Ejemplos:
+>    - conversación con una persona: `Arancha 1997 [+34606893792].txt`;
+>    - grupo sin nombre: `Julia [+34616014470], Pepo [pepe.puertolasmolina@gmail.com], Jorge [jorge.puertolas@gmail.com].txt`.
+>
+>    Se queda como en la versión oficial:
+>    - los participantes sin contacto, que llevan solo el identificador;
+>    - los grupos con nombre propio;
+>    - los remitentes cortos;
+>    - `orphaned.txt`.
 > 4. **Contactos en copias de iOS 7.** La tabla `ABPersonFullTextSearch_content` de iOS 7 tiene las columnas `c15Phone` y `c16Email` (en iOS modernos son `c16Phone` y `c17Email`, porque se añadió `c7OrganizationPhonetic`). La versión oficial usaba números fijos y fallaba. La nuestra elige cada columna por su sufijo (`First`, `Last`, `Phone`, `Email`), así que sirve para las dos.
 > 5. **Pruebas añadidas.** Cubren las conversiones anteriores (`whatsapp_reshape_*`, `whatsapp_get_time_has_no_read_receipt`, `ios7_fts_columns_are_found_by_suffix`, `modern_fts_columns_still_work`). Las pruebas originales siguen pasando sin cambios: 530 de 530 con `TZ=America/Los_Angeles cargo test -p imessage-exporter`. Las pruebas originales esperan horas del Pacífico, así que en otra zona horaria fallan también en la versión oficial.
 >
