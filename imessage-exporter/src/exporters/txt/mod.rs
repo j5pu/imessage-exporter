@@ -583,6 +583,20 @@ impl TXT<'_> {
                 as_path.strip_prefix(canon).map(std::path::Path::to_path_buf).ok()
             })
             .map_or_else(|| path.clone(), |p| p.display().to_string());
+        // Revocación fork: iOS backups up to iOS 9 (with `Manifest.mbdb`, no
+        // `Manifest.db`) store every file flat in the backup root (`<sha1>`),
+        // not in `<2 first chars>/<sha1>`. Write the path as it really is.
+        let relative = if db_path.join("Manifest.mbdb").exists()
+            && !db_path.join("Manifest.db").exists()
+            && let Some((prefix, rest)) = relative.split_once('/')
+            && prefix.len() == 2
+            && rest.len() == 40
+            && rest.starts_with(prefix)
+        {
+            rest.to_string()
+        } else {
+            relative
+        };
         let original = attachment
             .filename()
             .and_then(|name| std::path::Path::new(name).file_name())
